@@ -40,6 +40,14 @@
 #include <lv2/lv2plug.in/ns/lv2core/lv2.h>
 #endif
 
+#ifdef __ANDROID__
+    #include <android/log.h>
+    #define MODULE_NAME "convoLV2"
+    #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, MODULE_NAME, __VA_ARGS__)
+#else
+    #define LOGD(...) printf(__VA_ARGS__)
+#endif
+
 #include "./uris.h"
 
 #ifndef MAX
@@ -60,7 +68,7 @@
 typedef enum {
   P_CONTROL    = 0,
   P_NOTIFY     = 1,
-  P_OUTGAIN    = 2,
+  P_OUTGAIN    = 8,
 
   LOOP_DEFINE_PORTS(ENUMPORT)
 } PortIndex;
@@ -115,29 +123,35 @@ instantiate(const LV2_Descriptor*     descriptor,
   LV2_Worker_Schedule*      schedule = NULL;
   LV2_Log_Log*              log      = NULL;
   for (int i = 0; features[i]; ++i) {
+      LOGD ("found feature %s", features [i]->URI);
     if (!strcmp(features[i]->URI, LV2_URID__map)) {
       map = (LV2_URID_Map*)features[i]->data;
+      LOGD ("init feature map") ;
     } else if (!strcmp(features[i]->URI, LV2_WORKER__schedule)) {
       schedule = (LV2_Worker_Schedule*)features[i]->data;
+      LOGD ("init feature schedule") ;
     } else if (!strcmp(features[i]->URI, LV2_OPTIONS__options)) {
       options = (const LV2_Options_Option*)features[i]->data;
+      LOGD ("init feature options") ;
     } else if (!strcmp(features[i]->URI, LV2_LOG__log)) {
       log = (LV2_Log_Log*)features[i]->data;
+      LOGD ("init feature log") ;
     }
   }
 
+  LOGD ("features ok");
   // Initialise logger (if map is unavailable, will fallback to printf)
   LV2_Log_Logger logger;
   lv2_log_logger_init(&logger, map, log);
 
   if (!map) {
-    lv2_log_error(&logger, "Missing feature uri:map\n");
+    LOGD("Missing feature uri:map\n");
     return NULL;
   } else if (!schedule) {
-    lv2_log_error(&logger, "Missing feature work:schedule\n");
+    LOGD("Missing feature work:schedule\n");
     return NULL;
   } else if (!options) {
-    lv2_log_error(&logger, "Missing options\n");
+    LOGD("Missing options\n");
     return NULL;
   }
 
@@ -152,6 +166,8 @@ instantiate(const LV2_Descriptor*     descriptor,
     }
   }
 
+  if (bufsize == 0)
+    bufsize = 1024 ;
   if (bufsize == 0) {
     lv2_log_error(&logger, "No maximum buffer size given\n");
     return NULL;
@@ -189,6 +205,7 @@ instantiate(const LV2_Descriptor*     descriptor,
   self->output_gain_db = 0;
   self->output_gain_target = self->output_gain = 1.0;
 
+  LOGD ("set up ok");
   return (LV2_Handle)self;
 }
 
@@ -199,12 +216,13 @@ work(LV2_Handle                  instance,
      uint32_t                    size,
      const void*                 data)
 {
+    LOGD ("worker called");
   convoLV2* self = (convoLV2*)instance;
   int apply = 0;
 
   /* prepare new engine instance */
   if (!self->clv_offline) {
-    DEBUG_printf("Work: allocate offline instance\n");
+    LOGD("Work: allocate offline instance\n");
     self->clv_offline = clv_alloc();
 
     if (!self->clv_offline) {
@@ -217,16 +235,16 @@ work(LV2_Handle                  instance,
   if (size == sizeof(int)) {
     switch(*((const int*)data)) {
     case CMD_APPLY:
-      DEBUG_printf("Work: apply offline instance\n");
+      LOGD("Work: apply offline instance\n");
       apply = 1;
       break;
     case CMD_FREE:
-      DEBUG_printf("Work: free offline instance\n");
+      LOGD("Work: free offline instance\n");
       clv_free(self->clv_offline);
       self->clv_offline=NULL;
       break;
     default:
-      DEBUG_printf("Work: invalid command\n");
+      LOGD("Work: invalid command\n");
       break;
     }
   } else {
@@ -234,27 +252,29 @@ work(LV2_Handle                  instance,
     const LV2_Atom_Object* obj = (const LV2_Atom_Object*) data;
     ConvoLV2URIs* uris = &self->uris;
 
+    LOGD ("patch_set: %d, given type: %d", uris->patch_Set, obj->body.otype);
     if (obj->body.otype == uris->patch_Set) {
-      DEBUG_printf("Work: Atom Patch\n");
+      LOGD("Work: Atom Patch\n");
       const LV2_Atom* file_path = read_set_file(uris, obj);
       if (file_path && file_path->size > 0 && file_path->size < 1024) {
         const char *fn = (const char*)(file_path+1);
 	char path[1024];
 	strncpy (path, fn, file_path->size);
+    LOGD ("found file %s", path);
 	/* some version of jalv did not NULL terminate:
 	 * https://github.com/drobilla/jalv/issues/32 */
 	path[file_path->size] = '\0';
-        DEBUG_printf("load IR %s\n", path);
+        LOGD("load IR %s\n", path);
         clv_configure(self->clv_offline, "convolution.ir.file", path);
         apply = 1;
       }
     } else {
-      DEBUG_printf("Work: Invalid Atom Msg\n");
+      LOGD("Work: Invalid Atom Msg\n");
     }
   }
 
   if (apply) {
-    DEBUG_printf("Work: initialize offline instance\n");
+    LOGD("Work: initialize offline instance\n");
     clv_initialize(self->clv_offline, self->rate,
                    self->chn_in, self->chn_out,
                    /*64 <= buffer-size <=4096*/ self->bufsize);
@@ -410,7 +430,7 @@ run(LV2_Handle instance, uint32_t n_samples)
   /* don't touch any settings if re-init is scheduled or in progress
    * TODO re-queue them ?
    */
-  if (!self->flag_reinit_in_progress && self->control_port && self->notify_port) {
+  if (!self->flag_reinit_in_progress && self->control_port) {
     /* Read incoming events */
     LV2_ATOM_SEQUENCE_FOREACH(self->control_port, ev) {
       const LV2_Atom_Object* obj = (LV2_Atom_Object*)&ev->body;
