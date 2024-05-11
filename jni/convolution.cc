@@ -46,7 +46,7 @@
 #include <sndfile.h>
 #include <samplerate.h>
 #include "convolution.h"
-
+#include "log.h"
 #if ZITA_CONVOLVER_MAJOR_VERSION != 3 && ZITA_CONVOLVER_MAJOR_VERSION != 4
 # error "This programs requires zita-convolver 3 or 4"
 #endif
@@ -495,9 +495,13 @@ errout:
 }
 
 int clv_is_active (LV2convolv *clv) {
+	IN
 	if (!clv || !clv->convproc || !clv->ir_fn) {
+		OUT
 		return 0;
 	}
+	
+	OUT
 	return 1;
 }
 

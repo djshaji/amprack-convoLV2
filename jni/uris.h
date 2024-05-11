@@ -114,7 +114,7 @@ read_set_file(const ConvoLV2URIs*    uris,
               const LV2_Atom_Object* obj)
 {
 	if (obj->body.otype != uris->patch_Set) {
-		fprintf(stderr, "Ignoring unknown message type %d\n", obj->body.otype);
+		LOGD( "Ignoring unknown message type %d\n", obj->body.otype);
 		return NULL;
 	}
 
@@ -122,13 +122,13 @@ read_set_file(const ConvoLV2URIs*    uris,
 	const LV2_Atom* property = NULL;
 	lv2_atom_object_get(obj, uris->patch_property, &property, 0);
 	if (!property) {
-		fprintf(stderr, "Malformed set message has no body.\n");
+		LOGD( "Malformed set message has no body.\n");
 		return NULL;
 	} else if (property->type != uris->atom_URID) {
-		fprintf(stderr, "Malformed set message has non-URID property.\n");
+		LOGD( "Malformed set message has non-URID property.\n");
 		return NULL;
 	} else if (((LV2_Atom_URID*)property)->body != uris->clv2_impulse) {
-		fprintf(stderr, "Set message for unknown property.\n");
+		LOGD("Set message for unknown property.\n");
 		return NULL;
 	}
 
@@ -136,10 +136,10 @@ read_set_file(const ConvoLV2URIs*    uris,
 	const LV2_Atom* file_path = NULL;
 	lv2_atom_object_get(obj, uris->patch_value, &file_path, 0);
 	if (!file_path) {
-		fprintf(stderr, "Malformed set message has no value.\n");
+		LOGD( "Malformed set message has no value.\n");
 		return NULL;
 	} else if (file_path->type != uris->atom_Path) {
-		fprintf(stderr, "Set message value is not a Path.\n");
+		LOGD( "Set message value is not a Path.\n");
 		return NULL;
 	}
 

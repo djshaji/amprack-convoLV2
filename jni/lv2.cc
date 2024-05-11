@@ -69,8 +69,10 @@ typedef enum {
   P_CONTROL    = 0,
   P_NOTIFY     = 1,
   P_OUTGAIN    = 8,
+  FILENAMESIZE = 9,
+  FILENAME = 4,
 
-  LOOP_DEFINE_PORTS(ENUMPORT)
+  //~ LOOP_DEFINE_PORTS(ENUMPORT)
 } PortIndex;
 
 enum {
@@ -109,6 +111,9 @@ typedef struct {
 
   short flag_reinit_in_progress;
   short flag_notify_ui; ///< notify UI about setting on next run()
+
+  float filenameSize ;
+  char * filename ;
 
 } convoLV2;
 
@@ -199,8 +204,8 @@ instantiate(const LV2_Descriptor*     descriptor,
   self->chn_in = 1;
   self->chn_out = 1;
   self->flag_reinit_in_progress = 0;
-  self->clv_online = NULL;
-  self->clv_offline = NULL;
+  self->clv_online = clv_alloc () ;
+  self->clv_offline = clv_alloc () ;
 
   self->output_gain_db = 0;
   self->output_gain_target = self->output_gain = 1.0;
@@ -337,7 +342,7 @@ work_response(LV2_Handle  instance,
 }
 
 #define IOPORT(i) \
-    case P_INPUT ## i: \
+    case 5: \
       self->input[i] = (float*)data; \
       self->chn_in = MAX(self->chn_in,i+1); \
       break; \
@@ -352,9 +357,10 @@ connect_port(LV2_Handle instance,
              void*      data)
 {
   convoLV2* self = (convoLV2*)instance;
+  //~ LOGD ("connect port %d", port);
 
   switch ((PortIndex)port) {
-    LOOP_DEFINE_PORTS(IOPORT)
+    //~ LOOP_DEFINE_PORTS(IOPORT)
     case P_CONTROL:
       self->control_port = (const LV2_Atom_Sequence*)data;
       break;
@@ -364,6 +370,34 @@ connect_port(LV2_Handle instance,
     case P_OUTGAIN:
       self->p_output_gain = (float*)data;
       break;
+    case FILENAMESIZE:
+      self->filenameSize = * (float *) data ;
+      break ;
+    case FILENAME:
+      self->filename = (char *) data ;
+      self->clv_offline->ir_fn = self->filename ;
+      self->clv_online->ir_fn = self->filename ;
+      clv_initialize(self->clv_offline, self->rate, self->chn_in, self->chn_out,
+                 /*64 <= buffer-size <=4096*/ self->bufsize);      
+      LOGD ("set file %s", self -> filename);
+        clv_configure(self->clv_offline, "convolution.ir.file", self->filename);
+
+      LOGD("Work: initialize offline instance\n");
+      clv_initialize(self->clv_offline, self->rate,
+                   self->chn_in, self->chn_out,
+                   /*64 <= buffer-size <=4096*/ self->bufsize);
+
+      clv_initialize(self->clv_online, self->rate,
+                   self->chn_in, self->chn_out,
+                   /*64 <= buffer-size <=4096*/ self->bufsize);
+
+      LV2convolv *old  = self->clv_online;
+      self->clv_online  = self->clv_offline;
+      self->clv_offline = old;
+
+      clv_clone_settings(self->clv_offline, self->clv_online);
+      self->flag_reinit_in_progress = 0;
+      break ; 
   }
 }
 
@@ -393,36 +427,48 @@ run(LV2_Handle instance, uint32_t n_samples)
 
   self->output_gain += .08f * (self->output_gain_target - self->output_gain);
 
-  /* Set up forge to write directly to notify output port. */
+
+  /* Set up forge to write directly to notify output port. 
   if (self->notify_port) {
     const uint32_t notify_capacity = self->notify_port->atom.size;
     lv2_atom_forge_set_buffer(&self->forge,
                               (uint8_t*)self->notify_port,
                               notify_capacity);
+    */
 
-    /* Start a sequence in the notify output port. */
+    /* Start a sequence in the notify output port. 
     lv2_atom_forge_sequence_head(&self->forge, &self->notify_frame, 0);
   }
+  */
 
   bool silent = false;
 
   /* re-init engine if block-size has changed */
   if (self->bufsize != n_samples) {
+    LOGD ("self->bufsize != n_samples");
     /* verify if we support the new block-size */
     if (n_samples < 64 || n_samples > 8192 ||
         /* not power of two */ (n_samples & (n_samples - 1))
         ) {
+          LOGD("n_samples < 64 || n_samples > 8192 ||\
+        /* not power of two */ (n_samples & (n_samples - 1)");
       /* silence output ports */
       for (i=0; i < self->chn_out; i++ ) {
         memset(output[i], 0, sizeof(float) * n_samples);
       }
       silent = true;
     } else {
+      LOGD ("new sample size: %d", n_samples);
       if (!self->flag_reinit_in_progress && clv_is_active(self->clv_online)) {
-	self->flag_reinit_in_progress = 1;
-	self->bufsize = n_samples;
-	int d = CMD_APPLY;
-	self->schedule->schedule_work(self->schedule->handle, sizeof(int), &d);
+          LOGD ("reinit_in_progress") ;
+          self->flag_reinit_in_progress = 1;
+          self->bufsize = n_samples;
+          //~ int d = CMD_APPLY;
+          //~ self->schedule->schedule_work(self->schedule->handle, sizeof(int), &d);
+          clv_initialize(self->clv_offline, self->rate,
+               self->chn_in, self->chn_out,
+               /*64 <= buffer-size <=4096*/ self->bufsize);
+          LOGD ("reinitialize ok!");
       }
     }
   }
@@ -430,11 +476,16 @@ run(LV2_Handle instance, uint32_t n_samples)
   /* don't touch any settings if re-init is scheduled or in progress
    * TODO re-queue them ?
    */
-  if (!self->flag_reinit_in_progress && self->control_port) {
+   //~ if (! self->control_port)
+    //~ LOGD ("control port: is null");
+   //~ else 
+    //~ LOGD ("control port not null");
+  if (false /*!self->flag_reinit_in_progress && self->control_port */) {
     /* Read incoming events */
     LV2_ATOM_SEQUENCE_FOREACH(self->control_port, ev) {
       const LV2_Atom_Object* obj = (LV2_Atom_Object*)&ev->body;
       ConvoLV2URIs* uris = &self->uris;
+      LOGD ("[command] %d", obj->body.otype);
       if (obj->body.otype == uris->patch_Get) {
         self->flag_notify_ui = 0;
         inform_ui(instance);
@@ -446,7 +497,7 @@ run(LV2_Handle instance, uint32_t n_samples)
   }
 
   /* send current setting to UI */
-  if (self->flag_notify_ui && self->notify_port) {
+  if (false && self->flag_notify_ui && self->notify_port) {
     self->flag_notify_ui = 0;
     inform_ui(instance);
   }
