@@ -42,7 +42,7 @@ extern LV2convolv *clv_alloc();
 extern void clv_free (LV2convolv *clv);
 
 int clv_configure (LV2convolv *clv, const char *key, const char *value);
-extern int clv_initialize (LV2convolv *clv, const unsigned int sample_rate, const unsigned int in_channel_cnt, const unsigned int out_channel_cnt, const unsigned int buffersize);
+extern int clv_initialize (LV2convolv *clv, const unsigned int sample_rate, const unsigned int in_channel_cnt, const unsigned int out_channel_cnt, const unsigned int buffersize, int n);
 extern void clv_release (LV2convolv *clv);
 void clv_clone_settings(LV2convolv *clv_new, LV2convolv *clv);
 

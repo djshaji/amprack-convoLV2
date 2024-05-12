@@ -71,6 +71,7 @@ typedef enum {
   P_OUTGAIN    = 8,
   FILENAMESIZE = 9,
   FILENAME = 4,
+  FILEBUFFER = 10
 
   //~ LOOP_DEFINE_PORTS(ENUMPORT)
 } PortIndex;
@@ -112,7 +113,7 @@ typedef struct {
   short flag_reinit_in_progress;
   short flag_notify_ui; ///< notify UI about setting on next run()
 
-  float filenameSize ;
+  float filenameSize, *fileBuffer ;
   char * filename ;
 
 } convoLV2;
@@ -282,7 +283,7 @@ work(LV2_Handle                  instance,
     LOGD("Work: initialize offline instance\n");
     clv_initialize(self->clv_offline, self->rate,
                    self->chn_in, self->chn_out,
-                   /*64 <= buffer-size <=4096*/ self->bufsize);
+                   /*64 <= buffer-size <=4096*/ self->bufsize, self->filenameSize);
 #if 1
     respond(handle, 1, ""); // size must not be 0. A3 before rev 13146 will ignore it
 #else
@@ -372,30 +373,38 @@ connect_port(LV2_Handle instance,
       break;
     case FILENAMESIZE:
       self->filenameSize = * (float *) data ;
+      LOGD ("set filename size: %d", self->filenameSize);
       break ;
     case FILENAME:
-      self->filename = (char *) data ;
-      self->clv_offline->ir_fn = self->filename ;
-      self->clv_online->ir_fn = self->filename ;
-      clv_initialize(self->clv_offline, self->rate, self->chn_in, self->chn_out,
-                 /*64 <= buffer-size <=4096*/ self->bufsize);      
-      LOGD ("set file %s", self -> filename);
-        clv_configure(self->clv_offline, "convolution.ir.file", self->filename);
+      self->fileBuffer = (float *) malloc (self->filenameSize * sizeof (float));
+      float *d = (float *) data ;
+      for (int i = 0 ; i < self->filenameSize ; i ++) {
+        self->fileBuffer [i] = (float ) d [i];
+      }
+      
+      self->clv_online->fileBuffer = self->fileBuffer ;
+      //~ self->clv_offline->ir_fn = self->filename ;
+      //~ self->clv_online->ir_fn = self->filename ;
+      //~ clv_initialize(self->clv_offline, self->rate, self->chn_in, self->chn_out,
+                  //~ self->bufsize);      
+      //~ LOGD ("set file %s", self -> filename);
+      //~ clv_configure(self->clv_offline, "convolution.ir.file", self->filename);
+      //~ clv_configure(self->clv_online, "convolution.ir.file", self->filename);
 
-      LOGD("Work: initialize offline instance\n");
-      clv_initialize(self->clv_offline, self->rate,
-                   self->chn_in, self->chn_out,
-                   /*64 <= buffer-size <=4096*/ self->bufsize);
+      //~ LOGD("Work: initialize offline instance\n");
+      //~ clv_initialize(self->clv_offline, self->rate,
+                   //~ self->chn_in, self->chn_out,
+                    //~ self->bufsize);
 
       clv_initialize(self->clv_online, self->rate,
                    self->chn_in, self->chn_out,
-                   /*64 <= buffer-size <=4096*/ self->bufsize);
+                   self->bufsize, self->filenameSize);
 
-      LV2convolv *old  = self->clv_online;
-      self->clv_online  = self->clv_offline;
-      self->clv_offline = old;
+      //~ LV2convolv *old  = self->clv_online;
+      //~ self->clv_online  = self->clv_offline;
+      //~ self->clv_offline = old;
 
-      clv_clone_settings(self->clv_offline, self->clv_online);
+      //~ clv_clone_settings(self->clv_offline, self->clv_online);
       self->flag_reinit_in_progress = 0;
       break ; 
   }
@@ -450,15 +459,16 @@ run(LV2_Handle instance, uint32_t n_samples)
     if (n_samples < 64 || n_samples > 8192 ||
         /* not power of two */ (n_samples & (n_samples - 1))
         ) {
-          LOGD("n_samples < 64 || n_samples > 8192 ||\
-        /* not power of two */ (n_samples & (n_samples - 1)");
+          LOGD("[%d] n_samples < 64 || n_samples > 8192 ||\
+        /* not power of two */ (n_samples & (n_samples - 1)", n_samples);
       /* silence output ports */
       for (i=0; i < self->chn_out; i++ ) {
-        memset(output[i], 0, sizeof(float) * n_samples);
+        //memset(output[i], 0, sizeof(float) * n_samples);
+        self -> output [i] = self -> input [i];
       }
       silent = true;
     } else {
-      LOGD ("new sample size: %d", n_samples);
+      LOGD ("new sample size: %d [%d]", n_samples, self->flag_reinit_in_progress);
       if (!self->flag_reinit_in_progress && clv_is_active(self->clv_online)) {
           LOGD ("reinit_in_progress") ;
           self->flag_reinit_in_progress = 1;
@@ -467,7 +477,7 @@ run(LV2_Handle instance, uint32_t n_samples)
           //~ self->schedule->schedule_work(self->schedule->handle, sizeof(int), &d);
           clv_initialize(self->clv_offline, self->rate,
                self->chn_in, self->chn_out,
-               /*64 <= buffer-size <=4096*/ self->bufsize);
+               /*64 <= buffer-size <=4096*/ self->bufsize, self->filenameSize);
           LOGD ("reinitialize ok!");
       }
     }
@@ -503,11 +513,14 @@ run(LV2_Handle instance, uint32_t n_samples)
   }
 
   if (silent) {
+    LOGD ("silent");
     return;
   }
-  clv_convolve(self->clv_online, input, output,
-               self->chn_in,
-               self->chn_out,
+  
+  LOGD("going to convolve");
+  clv_convolve(self->clv_online, self->input, self->output,
+               1,
+               1,
                n_samples, self->output_gain);
 }
 

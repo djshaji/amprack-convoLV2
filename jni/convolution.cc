@@ -59,6 +59,7 @@ static pthread_mutex_t fftw_planner_lock = PTHREAD_MUTEX_INITIALIZER;
 
 struct LV2convolv {
 	Convproc *convproc;
+	float * fileBuffer ;
 
 	/* IR file */
 	char *ir_fn; ///< path to IR file
@@ -88,6 +89,7 @@ static int audiofile_read (const char *fn, const int sample_rate, float **buf, u
 	memset(&nfo, 0, sizeof(SF_INFO));
 
 	if ((sndfile = sf_open(fn, SFM_READ, &nfo)) == 0) {
+		LOGD ("cannot read file [%s]: %s", sf_error_number (sf_error (sndfile)), fn);
 		return -1;
 	}
 
@@ -302,8 +304,10 @@ int clv_initialize (
 		const unsigned int sample_rate,
 		const unsigned int in_channel_cnt,
 		const unsigned int out_channel_cnt,
-		const unsigned int buffersize)
+		const unsigned int buffersize,
+		int n_frames)
 {
+	IN
 	unsigned int c;
 	const unsigned int n_elem = in_channel_cnt * out_channel_cnt;
 
@@ -311,29 +315,28 @@ int clv_initialize (
 	const unsigned int options = 0;
 
 	/* IR file */
-	unsigned int n_chan = 0;
-	unsigned int n_frames = 0;
+	unsigned int n_chan = 1;
 	unsigned int max_size = 0;
 
-	float *p = NULL;  /* temp. IR file buffer */
+	float *p = clv->fileBuffer ;  /* temp. IR file buffer */
 	float *gb = NULL; /* temp. gain-scaled IR file buffer */
 
 	clv->fragment_size = buffersize;
 
 	if (clv->convproc) {
-		fprintf (stderr, "convoLV2: already initialized.\n");
+		LOGD("convoLV2: already initialized.\n");
 		return (-1);
 	}
 
-	if (!clv->ir_fn) {
-		fprintf (stderr, "convoLV2: No IR file was configured.\n");
-		return -1;
-	}
+	//~ if (!clv->ir_fn) {
+		//~ LOGD("convoLV2: No IR file was configured.\n");
+		//~ return -1;
+	//~ }
 
-	if (access(clv->ir_fn, R_OK) != 0) {
-		fprintf(stderr, "convoLV2: cannot stat IR: %s\n", clv->ir_fn);
-		return -1;
-	}
+	//~ if (access(clv->ir_fn, R_OK) != 0) {
+		//~ LOGD("convoLV2: cannot stat IR: %s\n", clv->ir_fn);
+		//~ return -1;
+	//~ }
 
 	pthread_mutex_lock(&fftw_planner_lock);
 
@@ -343,13 +346,14 @@ int clv_initialize (
 	clv->convproc->set_density (clv->density);
 #endif
 
-	if (audiofile_read (clv->ir_fn, sample_rate, &p, &n_chan, &n_frames)) {
-		fprintf(stderr, "convoLV2: failed to read IR.\n");
-		goto errout;
-	}
+	//~ LOGD("audio file %s", clv->ir_fn);
+	//~ if (audiofile_read (clv->ir_fn, sample_rate, &p, &n_chan, &n_frames)) {
+		//~ LOGD("convoLV2: failed to read IR.\n");
+		//~ goto errout;
+	//~ }
 
 	if (n_frames == 0 || n_chan == 0) {
-		fprintf(stderr, "convoLV2: invalid IR file.\n");
+		LOGD("convoLV2: invalid IR file. %d %d\n", n_frames, n_chan);
 		goto errout;
 	}
 
@@ -366,7 +370,7 @@ int clv_initialize (
 		max_size = clv->size;
 	}
 
-	VERBOSE_printf("convoLV2: max-convolution length %d samples (limit %d), period: %d samples\n", max_size, clv->size, buffersize);
+	LOGD("convoLV2: max-convolution length %d samples (limit %d), period: %d samples\n", max_size, clv->size, buffersize);
 
 
 	if (clv->convproc->configure (
@@ -380,17 +384,17 @@ int clv_initialize (
 				, clv->density
 #endif
 				)) {
-		fprintf (stderr, "convoLV2: Cannot initialize convolution engine.\n");
+		LOGD("convoLV2: Cannot initialize convolution engine.\n");
 		goto errout;
 	}
 
 	gb = (float*) malloc (n_frames * sizeof(float));
 	if (!gb) {
-		fprintf (stderr, "convoLV2: memory allocation failed for convolution buffer.\n");
+		LOGD("convoLV2: memory allocation failed for convolution buffer.\n");
 		goto errout;
 	}
 
-	VERBOSE_printf("convoLV2: Proc: in: %d, out: %d || IR-file: %d chn, %d samples\n",
+	LOGD("convoLV2: Proc: in: %d, out: %d || IR-file: %d chn, %d samples\n",
 			in_channel_cnt, out_channel_cnt, n_chan, n_frames);
 
 	// TODO use pre-configured channel-map (from state), IFF set and valid for the current file
@@ -413,7 +417,7 @@ int clv_initialize (
 		}
 	}
 	else if (n_elem > n_chan) {
-		VERBOSE_printf("convoLV2: IR file has too few channels for given processor config.\n");
+		LOGD("convoLV2: IR file has too few channels for given processor config.\n");
 		// missing some channels, first assign  in -> out, then x-over
 		// eg.  1: L -> L , 2: R -> R,  3: L -> R,  4: R -> L
 		// this allows to e.g load a 2-channel (stereo) IR into a
@@ -432,7 +436,7 @@ int clv_initialize (
 	}
 	else {
 		assert (n_elem < n_chan);
-		VERBOSE_printf("convoLV2: IR file has too many channels for given processor config.\n");
+		LOGD("convoLV2: IR file has too many channels for given processor config.\n");
 		// allow loading a quad file to a mono-in stereo-out
 		// eg.  1: L -> L , 2: L -> R
 		for (c = 0; c < n_elem && c < MAX_CHANNEL_MAPS; ++c) {
@@ -456,7 +460,7 @@ int clv_initialize (
 			gb[i] = p[i * n_chan + clv->ir_chan[c] - 1] * clv->ir_gain[c];
 		}
 
-		VERBOSE_printf ("convoLV2: SET in %d -> out %d [IR chn:%d gain:%+.3f dly:%d]\n",
+		LOGD ("convoLV2: SET in %d -> out %d [IR chn:%d gain:%+.3f dly:%d]\n",
 				clv->chn_inp[c],
 				clv->chn_out[c],
 				clv->ir_chan[c],
@@ -478,7 +482,7 @@ int clv_initialize (
 #endif
 
 	if (clv->convproc->start_process (0, 0)) {
-		fprintf(stderr, "convoLV2: Cannot start processing.\n");
+		LOGD("convoLV2: Cannot start processing.\n");
 		goto errout;
 	}
 
@@ -495,6 +499,7 @@ errout:
 }
 
 int clv_is_active (LV2convolv *clv) {
+	LOGD ("HI");
 	IN
 	if (!clv || !clv->convproc || !clv->ir_fn) {
 		OUT
@@ -520,10 +525,13 @@ int clv_convolve (LV2convolv *clv,
 		const unsigned int n_samples,
 		const float output_gain)
 {
+	LOGD ("SS");
+	IN
 	unsigned int c;
 
 	if (!clv || !clv->convproc) {
 		silent_output(outbuf, out_channel_cnt, n_samples);
+		OUT
 		return (0);
 	}
 
@@ -533,6 +541,7 @@ int clv_convolve (LV2convolv *clv,
 
 	if (clv->fragment_size != n_samples) {
 		silent_output(outbuf, out_channel_cnt, n_samples);
+		OUT
 		return -1;
 	}
 
@@ -541,6 +550,7 @@ int clv_convolve (LV2convolv *clv,
 		/* This cannot happen in sync-mode, but... */
 		assert (0);
 		silent_output(outbuf, out_channel_cnt, n_samples);
+		OUT
 		return (n_samples);
 	}
 #endif
@@ -564,6 +574,7 @@ int clv_convolve (LV2convolv *clv,
 		/* Note this will actually never happen in sync-mode */
 		assert (0);
 		silent_output(outbuf, out_channel_cnt, n_samples);
+		OUT
 		return (n_samples);
 	}
 
@@ -579,5 +590,6 @@ int clv_convolve (LV2convolv *clv,
 		}
 	}
 
+	OUT
 	return (n_samples);
 }
